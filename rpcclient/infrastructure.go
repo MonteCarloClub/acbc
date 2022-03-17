@@ -405,7 +405,8 @@ func (c *Client) SendCmd(cmd interface{}) chan *Response {
 	}
 
 	// Marshal the command.
-	// q:为什么要发送一个自增的id？？？
+	// q：为什么要发送一个自增的id？？？
+	// r：与批量发送请求有关
 	id := c.NextID()
 	marshalledJSON, err := acbcjson.MarshalCmd(rpcVersion, id, cmd)
 	if err != nil {

@@ -52,8 +52,7 @@ func MarshalCmd(rpcVersion RPCVersion, id interface{}, cmd interface{}) ([]byte,
 	// Create a slice of interface values in the order of the struct fields
 	// while respecting pointer fields as optional params and only adding
 	// them if they are non-nil.
-	// 按照结构字段的顺序创建一个接口值切片，同时将指针字段视为可选参数，并且仅在它们为非零时添加它们。
-	// q： 为什么先创建一个接口切片，然后对这个接口切片中的每个field序列化，而不是直接序列化？
+	// q： 为什么先创建一个接口切片，然后对这个接口切片中的每个field序列化，并且将指针视为可选参数，仅当它们非空时才添加它们？
 	params := makeParams(rt.Elem(), rv.Elem())
 
 	// Generate and marshal the final JSON-RPC request.

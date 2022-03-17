@@ -70,3 +70,12 @@ func Decode(dst *Hash, src string) error {
 
 	return nil
 }
+
+// String returns the Hash as the hexadecimal string of the byte-reversed
+// hash.
+func (hash Hash) String() string {
+	for i := 0; i < HashSize/2; i++ {
+		hash[i], hash[HashSize-1-i] = hash[HashSize-1-i], hash[i]
+	}
+	return hex.EncodeToString(hash[:])
+}

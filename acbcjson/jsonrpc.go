@@ -27,6 +27,28 @@ func (r RPCVersion) IsValid() bool {
 	return false
 }
 
+// RPCErrorCode represents an error code to be used as a part of an RPCError
+// which is in turn used in a JSON-RPC Response object.
+//
+// A specific type is used to help ensure the wrong errors aren't used.
+type RPCErrorCode int
+
+// RPCError represents an error that is used as a part of a JSON-RPC Response
+// object.
+type RPCError struct {
+	Code    RPCErrorCode `json:"code,omitempty"`
+	Message string       `json:"message,omitempty"`
+}
+
+// Guarantee RPCError satisfies the builtin error interface.
+var _, _ error = RPCError{}, (*RPCError)(nil)
+
+// Error returns a string describing the RPC error.  This satisfies the
+// builtin error interface.
+func (e RPCError) Error() string {
+	return fmt.Sprintf("%d: %s", e.Code, e.Message)
+}
+
 // IsValidIDType checks that the ID field (which can go in any of the JSON-RPC
 // requests, responses, or notifications) is valid.  JSON-RPC 1.0 allows any
 // valid JSON type.  JSON-RPC 2.0 (which bitcoind follows for some parts) only
