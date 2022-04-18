@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 // makeParams creates a slice of interface values for the given struct.
@@ -61,4 +62,98 @@ func MarshalCmd(rpcVersion RPCVersion, id interface{}, cmd interface{}) ([]byte,
 		return nil, err
 	}
 	return json.Marshal(rawCmd)
+}
+
+// checkNumParams ensures the supplied number of params is at least the minimum
+// required number for the command and less than the maximum allowed.
+func checkNumParams(numParams int, info *methodInfo) error {
+	if numParams < info.numReqParams || numParams > info.maxParams {
+		if info.numReqParams == info.maxParams {
+			str := fmt.Sprintf("wrong number of params (expected "+
+				"%d, received %d)", info.numReqParams,
+				numParams)
+			return makeError(ErrNumParams, str)
+		}
+
+		str := fmt.Sprintf("wrong number of params (expected "+
+			"between %d and %d, received %d)", info.numReqParams,
+			info.maxParams, numParams)
+		return makeError(ErrNumParams, str)
+	}
+
+	return nil
+}
+
+// populateDefaults populates default values into any remaining optional struct
+// fields that did not have parameters explicitly provided.  The caller should
+// have previously checked that the number of parameters being passed is at
+// least the required number of parameters to avoid unnecessary work in this
+// function, but since required fields never have default values, it will work
+// properly even without the check.
+func populateDefaults(numParams int, info *methodInfo, rv reflect.Value) {
+	// When there are no more parameters left in the supplied parameters,
+	// any remaining struct fields must be optional.  Thus, populate them
+	// with their associated default value as needed.
+	for i := numParams; i < info.maxParams; i++ {
+		rvf := rv.Field(i)
+		if defaultVal, ok := info.defaults[i]; ok {
+			rvf.Set(defaultVal)
+		}
+	}
+}
+
+// UnmarshalCmd unmarshals a JSON-RPC request into a suitable concrete command
+// so long as the method type contained within the marshalled request is
+// registered.
+func UnmarshalCmd(r *Request) (interface{}, error) {
+	registerLock.RLock()
+	rtp, ok := methodToConcreteType[r.Method]
+	info := methodToInfo[r.Method]
+	registerLock.RUnlock()
+	if !ok {
+		str := fmt.Sprintf("%q is not registered", r.Method)
+		return nil, makeError(ErrUnregisteredMethod, str)
+	}
+	rt := rtp.Elem()
+	rvp := reflect.New(rt)
+	rv := rvp.Elem()
+
+	// Ensure the number of parameters are correct.
+	numParams := len(r.Params)
+	if err := checkNumParams(numParams, &info); err != nil {
+		return nil, err
+	}
+
+	// Loop through each of the struct fields and unmarshal the associated
+	// parameter into them.
+	for i := 0; i < numParams; i++ {
+		rvf := rv.Field(i)
+		// Unmarshal the parameter into the struct field.
+		concreteVal := rvf.Addr().Interface()
+		if err := json.Unmarshal(r.Params[i], &concreteVal); err != nil {
+			// The most common error is the wrong type, so
+			// explicitly detect that error and make it nicer.
+			fieldName := strings.ToLower(rt.Field(i).Name)
+			if jerr, ok := err.(*json.UnmarshalTypeError); ok {
+				str := fmt.Sprintf("parameter #%d '%s' must "+
+					"be type %v (got %v)", i+1, fieldName,
+					jerr.Type, jerr.Value)
+				return nil, makeError(ErrInvalidType, str)
+			}
+
+			// Fallback to showing the underlying error.
+			str := fmt.Sprintf("parameter #%d '%s' failed to "+
+				"unmarshal: %v", i+1, fieldName, err)
+			return nil, makeError(ErrInvalidType, str)
+		}
+	}
+
+	// When there are less supplied parameters than the total number of
+	// params, any remaining struct fields must be optional.  Thus, populate
+	// them with their associated default value as needed.
+	if numParams < info.maxParams {
+		populateDefaults(numParams, &info, rv)
+	}
+
+	return rvp.Interface(), nil
 }

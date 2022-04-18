@@ -13,3 +13,11 @@ func NewGetBlockHashCmd(index int64) *GetBlockHashCmd {
 		Index: index,
 	}
 }
+
+func init() {
+	// re： 导入包时，go会自动执行包的init函数
+	// No special flags for commands in this file.
+	flags := UsageFlag(0)
+
+	MustRegisterCmd("getblockhash", (*GetBlockHashCmd)(nil), flags)
+}
