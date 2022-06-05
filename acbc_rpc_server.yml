@@ -1,0 +1,12 @@
+name: acbc-rpc-server
+kind: deploy
+predicate:
+  repository: acbc-rpc-server
+  tag: latest
+requirement:
+  local_image: true
+  detach: true
+  network_list:
+    - kether-net:172.18.0.1
+  publish_list:
+    - 8334:8334

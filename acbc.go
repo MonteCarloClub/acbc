@@ -2,12 +2,15 @@ package main
 
 import (
 	"fmt"
+	"github.com/MonteCarloClub/acbc/config"
+	"github.com/MonteCarloClub/acbc/log"
+	"github.com/MonteCarloClub/acbc/signal"
 	"os"
 	"runtime"
 )
 
 var (
-	cfg *config
+	cfg *config.Config
 )
 
 // winServiceMain is only invoked on Windows.  It detects when btcd is running
@@ -16,6 +19,7 @@ var (
 var winServiceMain func() (bool, error)
 
 func main() {
+
 	// Call serviceMain on Windows to handle running as a service.  When
 	// the return isService flag is true, exit now since we ran as a
 	// service.  Otherwise, just fall through to normal operation.
@@ -40,27 +44,25 @@ func main() {
 func acbcMain(serverChan chan<- *server) error {
 	// Load configuration and parse command line.  This function also
 	// initializes logging and configures it accordingly.
-	tcfg, _, err := loadConfig()
+	tcfg, _, err := config.LoadConfig("8334")
 	if err != nil {
 		return err
 	}
 	cfg = tcfg
 	defer func() {
-		if logRotator != nil {
-			logRotator.Close()
+		if log.LogRotator != nil {
+			log.LogRotator.Close()
 		}
 	}()
 
 	// Get a channel that will be closed when a shutdown signal has been
 	// triggered either from an OS signal such as SIGINT (Ctrl+C) or from
 	// another subsystem such as the RPC server.
-	interrupt := interruptListener()
-	defer acbcLog.Info("Shutdown complete")
+	interrupt := signal.InterruptListener()
+	defer log.AcbcLog.Info("Shutdown complete")
 
-	// Show version at startup.
-	acbcLog.Infof("Version %s", version())
-
-	//todo： 启动其他
+	//Show version at startup.
+	fmt.Println("Version %s", version())
 
 	// Create server and start it.
 	server, err := newServer()
@@ -71,10 +73,10 @@ func acbcMain(serverChan chan<- *server) error {
 		return err
 	}
 	defer func() {
-		acbcLog.Infof("Gracefully shutting down the server...")
+		log.AcbcLog.Infof("Gracefully shutting down the server...")
 		server.Stop()
 		//server.WaitForShutdown()
-		srvrLog.Infof("Server shutdown complete")
+		log.SrvrLog.Infof("Server shutdown complete")
 	}()
 	server.Start()
 	if serverChan != nil {

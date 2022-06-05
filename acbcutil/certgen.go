@@ -71,7 +71,7 @@ func NewTLSCertPair(organization string, validUntil time.Time, extraHosts []stri
 		dnsNames = append(dnsNames, host)
 	}
 
-	addrs, err := interfaceAddrs()
+	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return nil, nil, err
 	}

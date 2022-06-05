@@ -32,7 +32,7 @@ func makeParams(rt reflect.Type, rv reflect.Value) []interface{} {
 // is suitable for transmission to an RPC server.  The provided command type
 // must be a registered type.  All commands provided by this package are
 // registered by default.
-func MarshalCmd(rpcVersion RPCVersion, id interface{}, cmd interface{}) ([]byte, error) {
+func MarshalCmd(moduleFrom string, moduleTo string, id interface{}, cmd interface{}) ([]byte, error) {
 	// Look up the cmd type and error out if not registered.
 	rt := reflect.TypeOf(cmd)
 	registerLock.RLock()
@@ -57,7 +57,7 @@ func MarshalCmd(rpcVersion RPCVersion, id interface{}, cmd interface{}) ([]byte,
 	params := makeParams(rt.Elem(), rv.Elem())
 
 	// Generate and marshal the final JSON-RPC request.
-	rawCmd, err := NewRequest(rpcVersion, id, method, params)
+	rawCmd, err := NewRequest(moduleFrom, moduleTo, id, method, params)
 	if err != nil {
 		return nil, err
 	}
@@ -107,8 +107,8 @@ func populateDefaults(numParams int, info *methodInfo, rv reflect.Value) {
 // registered.
 func UnmarshalCmd(r *Request) (interface{}, error) {
 	registerLock.RLock()
-	rtp, ok := methodToConcreteType[r.Method]
-	info := methodToInfo[r.Method]
+	rtp, ok := MethodToConcreteType[r.Method]
+	info := MethodToInfo[r.Method]
 	registerLock.RUnlock()
 	if !ok {
 		str := fmt.Sprintf("%q is not registered", r.Method)

@@ -3,54 +3,13 @@ package main
 import (
 	"crypto/tls"
 	"errors"
-	"fmt"
-	"github.com/MonteCarloClub/acbc/blockchain"
-	"github.com/MonteCarloClub/acbc/blockchain/indexers"
-	"github.com/MonteCarloClub/acbc/chaincfg/chainhash"
-	"github.com/MonteCarloClub/acbc/connmgr"
-	"github.com/MonteCarloClub/acbc/database"
-	"github.com/MonteCarloClub/acbc/mempool"
-	"github.com/MonteCarloClub/acbc/mining/cpuminer"
-	"github.com/MonteCarloClub/acbc/peer"
-	"github.com/MonteCarloClub/acbc/wire"
+	"github.com/MonteCarloClub/acbc/config"
+	"github.com/MonteCarloClub/acbc/log"
+	"github.com/MonteCarloClub/acbc/rpcserver"
 	"net"
-	"runtime"
-	"strings"
 	"sync"
+	"time"
 )
-
-// cfHeaderKV is a tuple of a filter header and its associated block hash. The
-// struct is used to cache cfcheckpt responses.
-type cfHeaderKV struct {
-	blockHash    chainhash.Hash
-	filterHeader chainhash.Hash
-}
-
-// relayMsg packages an inventory vector along with the newly discovered
-// inventory so the relay has access to that information.
-type relayMsg struct {
-	invVect *wire.InvVect
-	data    interface{}
-}
-
-// broadcastMsg provides the ability to house a bitcoin message to be broadcast
-// to all connected peers except specified excluded peers.
-type broadcastMsg struct {
-	message      wire.Message
-	excludePeers []*serverPeer
-}
-
-// updatePeerHeightsMsg is a message sent from the blockmanager to the server
-// after a new block has been accepted. The purpose of the message is to update
-// the heights of peers that were known to announce the block before we
-// connected it to the main chain or recognized it as an orphan. With these
-// updates, peer heights will be kept up to date, allowing for fresh data when
-// selecting sync peer candidacy.
-type updatePeerHeightsMsg struct {
-	newHash    *chainhash.Hash
-	newHeight  int32
-	originPeer *peer.Peer
-}
 
 // server provides a bitcoin server for handling communications to and from
 // bitcoin peers.
@@ -71,42 +30,15 @@ type server struct {
 		sigCache             *txscript.SigCache
 		hashCache            *txscript.HashCache
 	*/
-	rpcServer *rpcServer
-	//syncManager          *netsync.SyncManager
-	chain                *blockchain.BlockChain
-	txMemPool            *mempool.TxPool
-	cpuMiner             *cpuminer.CPUMiner
+	rpcServer            *rpcserver.RpcServer
 	modifyRebroadcastInv chan interface{}
 	newPeers             chan *serverPeer
 	donePeers            chan *serverPeer
 	banPeers             chan *serverPeer
 	query                chan interface{}
-	relayInv             chan relayMsg
-	broadcast            chan broadcastMsg
-	peerHeightsUpdate    chan updatePeerHeightsMsg
 	wg                   sync.WaitGroup
 	quit                 chan struct{}
 	//nat                  NAT
-	db         database.DB
-	timeSource blockchain.MedianTimeSource
-	services   wire.ServiceFlag
-
-	// The following fields are used for optional indexes.  They will be nil
-	// if the associated index is not enabled.  These fields are set during
-	// initial creation of the server and never changed afterwards, so they
-	// do not need to be protected for concurrent access.
-	txIndex   *indexers.TxIndex
-	addrIndex *indexers.AddrIndex
-	cfIndex   *indexers.CfIndex
-
-	// The fee estimator keeps track of how long transactions are left in
-	// the mempool before they are mined into blocks.
-	feeEstimator *mempool.FeeEstimator
-
-	// cfCheckptCaches stores a cached slice of filter headers for cfcheckpt
-	// messages for each filter type.
-	cfCheckptCaches    map[wire.FilterType][]cfHeaderKV
-	cfCheckptCachesMtx sync.RWMutex
 
 	// agentBlacklist is a list of blacklisted substrings by which to filter
 	// user agents.
@@ -123,12 +55,10 @@ type serverPeer struct {
 	// The following variables must only be used atomically
 	feeFilter int64
 
-	*peer.Peer
-
 	//connReq        *connmgr.ConnReq
-	server         *server
-	persistent     bool
-	continueHash   *chainhash.Hash
+	server     *server
+	persistent bool
+	//continueHash   *chainhash.Hash
 	relayMtx       sync.Mutex
 	disableRelayTx bool
 	sentAddrs      bool
@@ -136,7 +66,6 @@ type serverPeer struct {
 	//filter         *bloom.Filter
 	addressesMtx   sync.RWMutex
 	knownAddresses map[string]struct{}
-	banScore       connmgr.DynamicBanScore
 	quit           chan struct{}
 	// The following chans are used to sync blockmanager and server.
 	txProcessed    chan struct{}
@@ -148,72 +77,9 @@ type onionAddr struct {
 	addr string
 }
 
-// simpleAddr implements the net.Addr interface with two struct fields
-type simpleAddr struct {
-	net, addr string
-}
-
-// String returns the address.
-//
-// This is part of the net.Addr interface.
-func (a simpleAddr) String() string {
-	return a.addr
-}
-
-// Network returns the network.
-//
-// This is part of the net.Addr interface.
-func (a simpleAddr) Network() string {
-	return a.net
-}
-
 // WaitForShutdown blocks until the main listener and peer handlers are stopped.
 func (s *server) WaitForShutdown() {
 	s.wg.Wait()
-}
-
-// parseListeners determines whether each listen address is IPv4 and IPv6 and
-// returns a slice of appropriate net.Addrs to listen on with TCP. It also
-// properly detects addresses which apply to "all interfaces" and adds the
-// address as both IPv4 and IPv6.
-func parseListeners(addrs []string) ([]net.Addr, error) {
-	netAddrs := make([]net.Addr, 0, len(addrs)*2)
-	for _, addr := range addrs {
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			// Shouldn't happen due to already being normalized.
-			return nil, err
-		}
-
-		// Empty host or host of * on plan9 is both IPv4 and IPv6.
-		if host == "" || (host == "*" && runtime.GOOS == "plan9") {
-			netAddrs = append(netAddrs, simpleAddr{net: "tcp4", addr: addr})
-			netAddrs = append(netAddrs, simpleAddr{net: "tcp6", addr: addr})
-			continue
-		}
-
-		// Strip IPv6 zone id if present since net.ParseIP does not
-		// handle it.
-		zoneIndex := strings.LastIndex(host, "%")
-		if zoneIndex > 0 {
-			host = host[:zoneIndex]
-		}
-
-		// Parse the IP.
-		ip := net.ParseIP(host)
-		if ip == nil {
-			return nil, fmt.Errorf("'%s' is not a valid IP address", host)
-		}
-
-		// To4 returns nil when the IP is not an IPv4 address, so use
-		// this determine the address type.
-		if ip.To4() == nil {
-			netAddrs = append(netAddrs, simpleAddr{net: "tcp6", addr: addr})
-		} else {
-			netAddrs = append(netAddrs, simpleAddr{net: "tcp4", addr: addr})
-		}
-	}
-	return netAddrs, nil
 }
 
 // setupRPCListeners returns a slice of listeners that are configured for use
@@ -226,8 +92,8 @@ func setupRPCListeners() ([]net.Listener, error) {
 	if !cfg.DisableTLS {
 		// Generate the TLS cert and key file if both don't already
 		// exist.
-		if !fileExists(cfg.RPCKey) && !fileExists(cfg.RPCCert) {
-			err := genCertPair(cfg.RPCCert, cfg.RPCKey)
+		if !config.FileExists(cfg.RPCKey) && !config.FileExists(cfg.RPCCert) {
+			err := rpcserver.GenCertPair(cfg.RPCCert, cfg.RPCKey)
 			if err != nil {
 				return nil, err
 			}
@@ -249,7 +115,7 @@ func setupRPCListeners() ([]net.Listener, error) {
 			return tls.Listen(net, laddr, &tlsConfig)
 		}
 	}
-	netAddrs, err := parseListeners(cfg.RPCListeners)
+	netAddrs, err := config.ParseListeners(cfg.RPCListeners)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +123,7 @@ func setupRPCListeners() ([]net.Listener, error) {
 	for _, addr := range netAddrs {
 		listener, err := listenFunc(addr.Network(), addr.String())
 		if err != nil {
-			rpcsLog.Warnf("Can't listen on %s: %v", addr, err)
+			log.RpcsLog.Warnf("Can't listen on %s: %v", addr, err)
 			continue
 		}
 		listeners = append(listeners, listener)
@@ -270,27 +136,30 @@ func newServer() (*server, error) {
 	s := server{
 		//chainParams:          chainParams,
 		//addrManager:          amgr,
-		newPeers:             make(chan *serverPeer, cfg.MaxPeers),
-		donePeers:            make(chan *serverPeer, cfg.MaxPeers),
-		banPeers:             make(chan *serverPeer, cfg.MaxPeers),
-		query:                make(chan interface{}),
-		relayInv:             make(chan relayMsg, cfg.MaxPeers),
-		broadcast:            make(chan broadcastMsg, cfg.MaxPeers),
+		query: make(chan interface{}),
+
 		quit:                 make(chan struct{}),
 		modifyRebroadcastInv: make(chan interface{}),
-		peerHeightsUpdate:    make(chan updatePeerHeightsMsg),
-		//nat:                  nat,
-		//db:                   db,
-		//timeSource:           blockchain.NewMedianTime(),
-		//services:             services,
-		//sigCache:             txscript.NewSigCache(cfg.SigCacheMaxSize),
-		//hashCache:            txscript.NewHashCache(cfg.SigCacheMaxSize),
-		//cfCheckptCaches:      make(map[wire.FilterType][]cfHeaderKV),
-		//agentBlacklist:       agentBlacklist,
-		//agentWhitelist:       agentWhitelist,
 	}
 
 	if !cfg.DisableRPC {
+
+		rcfg := &rpcserver.Rpcconfig{
+			cfg.DisableRPC,
+			cfg.DisableTLS,
+			cfg.RPCCert,
+			cfg.RPCKey,
+			cfg.RPCLimitPass,
+			cfg.RPCLimitUser,
+			cfg.RPCListeners,
+			cfg.RPCMaxClients,
+			cfg.RPCMaxConcurrentReqs,
+			cfg.RPCMaxWebsockets,
+			cfg.RPCQuirks,
+			cfg.RPCPass,
+			cfg.RPCUser,
+		}
+
 		// Setup listeners for the configured RPC listen addresses and
 		// TLS settings.
 		rpcListeners, err := setupRPCListeners()
@@ -300,23 +169,13 @@ func newServer() (*server, error) {
 		if len(rpcListeners) == 0 {
 			return nil, errors.New("RPCS: No valid listen address")
 		}
-		s.rpcServer, err = newRPCServer(&rpcserverConfig{
+		s.rpcServer, err = rpcserver.NewRPCServer(&rpcserver.RpcserverConfig{
 			Listeners:   rpcListeners,
 			StartupTime: s.startupTime,
 			//ConnMgr:      &rpcConnManager{&s},
 			//SyncMgr:      &rpcSyncMgr{&s, s.syncManager},
-			TimeSource: s.timeSource,
-			Chain:      s.chain,
-			//ChainParams:  chainParams,
-			//DB:           db,
-			TxMemPool: s.txMemPool,
-			//Generator:    blockTemplateGenerator,
-			CPUMiner:     s.cpuMiner,
-			TxIndex:      s.txIndex,
-			AddrIndex:    s.addrIndex,
-			CfIndex:      s.cfIndex,
-			FeeEstimator: s.feeEstimator,
-		})
+			Isproxy: true,
+		}, rcfg)
 		if err != nil {
 			return nil, err
 		}
@@ -393,6 +252,8 @@ func (s *server) rebroadcastHandler() {
 
 // Start begins accepting connections from peers.
 func (s *server) Start() {
+	//Server startup time. Used for the uptime command for uptime calculation.
+	s.startupTime = time.Now().Unix()
 	/*
 		// Already started?
 		if atomic.AddInt32(&s.started, 1) != 1 {
@@ -401,7 +262,7 @@ func (s *server) Start() {
 
 		srvrLog.Trace("Starting server")
 
-		// Server startup time. Used for the uptime command for uptime calculation.
+		 Server startup time. Used for the uptime command for uptime calculation.
 		s.startupTime = time.Now().Unix()
 
 		// Start the peer handler which in turn starts the address and block

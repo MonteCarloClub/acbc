@@ -47,8 +47,8 @@ type methodInfo struct {
 var (
 	// These fields are used to map the registered types to method names.
 	registerLock         sync.RWMutex
-	methodToConcreteType = make(map[string]reflect.Type)
-	methodToInfo         = make(map[string]methodInfo)
+	MethodToConcreteType = make(map[string]reflect.Type)
+	MethodToInfo         = make(map[string]methodInfo)
 	concreteTypeToMethod = make(map[reflect.Type]string)
 )
 
@@ -120,7 +120,7 @@ func RegisterCmd(method string, cmd interface{}, flags UsageFlag) error {
 	registerLock.Lock()
 	defer registerLock.Unlock()
 
-	if _, ok := methodToConcreteType[method]; ok {
+	if _, ok := MethodToConcreteType[method]; ok {
 		str := fmt.Sprintf("method %q is already registered", method)
 		return makeError(ErrDuplicateMethod, str)
 	}
@@ -216,8 +216,8 @@ func RegisterCmd(method string, cmd interface{}, flags UsageFlag) error {
 	}
 
 	// Update the registration maps.
-	methodToConcreteType[method] = rtp
-	methodToInfo[method] = methodInfo{
+	MethodToConcreteType[method] = rtp
+	MethodToInfo[method] = methodInfo{
 		maxParams:    numFields,
 		numReqParams: numFields - numOptFields,
 		numOptParams: numOptFields,

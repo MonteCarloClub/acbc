@@ -4,10 +4,6 @@ package acbcjson
 // server are most likely to see.  Generally, the codes should match one of the
 // more general errors above.
 
-const (
-	ErrRPCOutOfRange RPCErrorCode = -1
-)
-
 // Standard JSON-RPC 2.0 errors.
 var (
 	ErrRPCInvalidRequest = &RPCError{
