@@ -816,8 +816,14 @@ func (s *RpcServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 			respon := acbcjson.Response{}
 			err := json.Unmarshal(resp, &respon)
 			if err != nil {
-				fmt.Println(err.Error())
-				return
+				jsonErr := &acbcjson.RPCError{
+					Code:    acbcjson.ErrRPCParse.Code,
+					Message: fmt.Sprintf("Failed to parse response: %v", err),
+				}
+				resp, err = acbcjson.MarshalResponse(req.ModuleFrom, req.ModuleTo, nil, nil, jsonErr)
+				if err != nil {
+					log.RpcsLog.Errorf("Failed to create reply: %v", err)
+				}
 			}
 			fmt.Println("获取结果")
 			fmt.Printf("%+v", respon)

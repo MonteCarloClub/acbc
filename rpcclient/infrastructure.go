@@ -599,6 +599,9 @@ cleanup:
 // start begins processing input and output messages.
 func (c *Client) Start() {
 	rpcclientlog.Tracef("Starting RPC client %s", c.config.Host)
+	c.disconnected = false
+	c.disconnect = make(chan struct{})
+	c.shutdown = make(chan struct{})
 
 	// Start the I/O processing handlers depending on whether the client is
 	// in HTTP POST mode or the default websocket mode.
@@ -609,6 +612,7 @@ func (c *Client) Start() {
 		rpcclientlog.Tracef("不支持非http")
 		return
 	}
+
 }
 
 // Disconnected returns whether or not the server is disconnected.  If a
@@ -756,7 +760,6 @@ func New(config *ConnConfig) (*Client, error) {
 		close(connEstablished)
 		client.Start()
 	}
-
 	return client, nil
 }
 
@@ -823,7 +826,6 @@ func (c *Client) sendPostRequest(jReq *jsonRequest) {
 	// q： 为什么要使用一个channel c.shutdown来判断 是否关闭 而不是一个 bool型
 	select {
 	case <-c.shutdown:
-		fmt.Println(2222)
 		jReq.responseChan <- &Response{Result: nil, Error: ErrClientShutdown}
 	default:
 	}
